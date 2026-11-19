@@ -34,7 +34,7 @@ def init_db():
                 selected_media_id INTEGER NOT NULL DEFAULT 0,
                 cycle_interval INTEGER NOT NULL DEFAULT 10,
                 background_color TEXT NOT NULL DEFAULT '#ffffff',
-                progress_indicator TEXT NOT NULL DEFAULT 'progress',
+                progress_indicator TEXT NOT NULL DEFAULT 'countdown',
                 video_fit TEXT NOT NULL DEFAULT 'contain'
             )
         ''')
@@ -266,7 +266,8 @@ def get_display_by_slug(slug):
 def create_display(name, slug, width, height):
     with get_db() as conn:
         conn.execute(
-            'INSERT INTO displays (name, slug, width, height) VALUES (?, ?, ?, ?)',
+            "INSERT INTO displays (name, slug, width, height, progress_indicator) "
+            "VALUES (?, ?, ?, ?, 'countdown')",
             (name, slug, width, height)
         )
         return conn.execute('SELECT last_insert_rowid()').fetchone()[0]
