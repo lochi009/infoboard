@@ -74,3 +74,4 @@ session_log.md
 # MemPalace per-project files (issue #185)
 mempalace.yaml
 entities.json
+current_state.md
