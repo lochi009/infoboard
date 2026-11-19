@@ -196,6 +196,7 @@
 
     <script>
         var DISPLAY_SLUG = {{ slug | tojson }};
+        var LAYOUT_PRESET = {{ layout_preset | tojson }};
 
         // Progress bar tick rate: 4x/sec reads as smooth for a slow linear fill
         // without the cost of a continuous CSS transition (each tick is an
@@ -419,6 +420,12 @@
                             location.reload();
                             return;
                         }
+                    }
+                    // Layout (zone count/arrangement) is rendered server-side into the
+                    // page, so a changed layout needs a full reload.
+                    if (data.layout_preset && data.layout_preset !== LAYOUT_PRESET) {
+                        location.reload();
+                        return;
                     }
                     document.body.style.backgroundColor = data.background_color || '#ffffff';
                     self.ambientBgEnabled = !!data.ambient_bg;

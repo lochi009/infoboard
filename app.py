@@ -526,6 +526,7 @@ def display_api(slug):
         'progress_indicator': display['progress_indicator'],
         'ambient_bg': bool(display['ambient_bg']),
         'version': APP_VERSION,
+        'layout_preset': display['layout_preset'] or 'fullscreen',
     }
 
     # --- Playlist mode ---
@@ -577,6 +578,7 @@ def zone_api(slug, zone_index):
         'progress_indicator': display['progress_indicator'],
         'ambient_bg': bool(display['ambient_bg']),
         'version': APP_VERSION,
+        'layout_preset': display['layout_preset'] or 'fullscreen',
     }
 
     # Playlist mode
