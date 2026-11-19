@@ -481,11 +481,11 @@
                 {% set preset_info = layout_presets.get(d.layout_preset, {}) %}
                 <div class="zone-panels" style="border-top:1px solid #eee;">
                     {% for zone in zones %}
-                    {% set zone_label = preset_info.zone_labels[zone.zone_index] if zone.zone_index < (preset_info.zone_labels|length) else ('Zone ' ~ zone.zone_index) %}
+                    {% set zone_label = preset_info.zone_labels[zone.zone_index] if zone.zone_index < (preset_info.zone_labels|length) else ('Zone ' ~ (zone.zone_index + 1)) %}
                     {% set zpl = zone_playlists.get(zone.id, []) %}
                     <div class="zone-panel" style="border-bottom:1px solid #f0f0f0;padding:12px 16px;">
                         <div style="font-size:13px;font-weight:700;color:#667eea;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em;">
-                            Zone {{ zone.zone_index }}: {{ zone_label }}
+                            Zone {{ zone.zone_index + 1 }}: {{ zone_label }}
                         </div>
                         {% if not zpl %}
                         <p style="color:#999;font-size:13px;margin-bottom:12px;" class="zone-playlist-empty-{{ zone.id }}">Leer — neuester Inhalt wird automatisch angezeigt.</p>
