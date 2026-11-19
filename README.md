@@ -14,7 +14,8 @@ Self-hosted digital signage that runs in any modern browser. No dedicated player
 - **Website proxy** — embeds external pages by stripping X-Frame-Options/CSP headers
 - **Admin panel** — upload, rename, delete media; manage playlists; configure per-display settings
 - **Authentication** — single admin user with bcrypt-hashed password
-- **Auto-updating display** — polls for changes every 10 seconds, no manual refresh needed
+- **Auto-updating display** — polls for changes every 10 seconds; content, layout changes and new app versions are picked up without a manual refresh
+- **Progress indicator** — per display: progress bar, subtle bar, countdown (default, lowest CPU use) or none
 
 ## Technology Stack
 
@@ -117,7 +118,7 @@ infoboard/
 ├── cookie_hide.conf            # CSS selectors to hide on proxied pages
 ├── config.json.example         # Config template
 ├── generate_password_hash.py   # Generate bcrypt password hash
-└── infoboard.service       # Systemd service template
+└── infoboard.service           # Systemd service template
 ```
 
 ## Security Notes
@@ -134,7 +135,14 @@ cd /path/to/infoboard
 ./update.sh
 ```
 
-The update script creates a backup tag, pulls the latest code, updates dependencies and restarts the service. See [DEPLOYMENT.md](DEPLOYMENT.md) for rollback instructions.
+The update script follows the target chosen during `deploy.sh` (stored in `deployment.conf`): either the latest `main`, or a pinned release tag. It creates a backup tag, pulls the code, runs database migrations, updates dependencies and restarts the service.
+
+```bash
+./update.sh --latest        # follow main
+./update.sh --tag v2.2      # pin to a release tag
+```
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for rollback instructions.
 
 ## License
 
