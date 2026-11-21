@@ -272,7 +272,12 @@
     <div id="tab-displays">
     <!-- ===== DISPLAYS ===== -->
     <div class="section">
-        <h2>Displays</h2>
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h2 style="margin-bottom: 0;">Displays</h2>
+            <button type="button" class="btn btn-sm btn-success" id="btn-new-display-top" onclick="toggleNewDisplayForm()">
+                + Neues Display
+            </button>
+        </div>
 
         <div class="display-cards">
             {% for d in displays %}
@@ -583,8 +588,17 @@
             {% endfor %}
         </div>
 
-        <div class="form-bg">
-            <h2 style="font-size:16px;margin-bottom:12px;">Neues Display hinzufügen</h2>
+        <div style="margin-top: 15px;">
+            <button type="button" class="btn btn-secondary" id="btn-new-display-bottom" onclick="toggleNewDisplayForm()">
+                + Neues Display hinzufügen
+            </button>
+        </div>
+
+        <div class="form-bg" id="new-display-form" style="display: none; margin-top: 15px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h3 style="font-size: 15px; font-weight: 600; color: #333; margin: 0;">Neues Display hinzufügen</h3>
+                <button type="button" class="btn-sm btn-secondary" onclick="toggleNewDisplayForm()" style="padding: 2px 8px; font-size: 11px;">✕ Schließen</button>
+            </div>
             <form method="POST" action="{{ url_for('create_display_route') }}">
                 <div class="form-row">
                     <div class="form-group">
@@ -606,7 +620,7 @@
                     </div>
                     <div>
                         <label>&nbsp;</label>
-                        <button type="submit">Hinzufügen</button>
+                        <button type="submit" class="btn-success">Hinzufügen</button>
                     </div>
                 </div>
             </form>
@@ -953,6 +967,27 @@
             }
         });
     })();
+
+    // Toggle new display form
+    function toggleNewDisplayForm() {
+        var form = document.getElementById('new-display-form');
+        var btnTop = document.getElementById('btn-new-display-top');
+        var btnBottom = document.getElementById('btn-new-display-bottom');
+        if (!form) return;
+        var isHidden = form.style.display === 'none';
+        if (isHidden) {
+            form.style.display = 'block';
+            if (btnTop) btnTop.textContent = '✕ Abbrechen';
+            if (btnBottom) btnBottom.style.display = 'none';
+            form.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            var nameInput = form.querySelector('input[name="name"]');
+            if (nameInput) nameInput.focus();
+        } else {
+            form.style.display = 'none';
+            if (btnTop) btnTop.textContent = '+ Neues Display';
+            if (btnBottom) btnBottom.style.display = '';
+        }
+    }
 
     function toggleRename(id) {
         document.getElementById('rename-' + id).classList.toggle('active');
