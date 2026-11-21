@@ -332,11 +332,17 @@
                     </div>
                 </div>
 
+                {% set is_multizone = d.layout_preset and d.layout_preset != 'fullscreen' %}
                 {% set pl = display_playlists.get(d.id, []) %}
                 <div class="display-card-status">
-                    {% if pl %}
+                    {% if is_multizone %}
+                        {% set zones = display_zones.get(d.id, []) %}
                         <span class="status-dot mode-playlist"></span>
-                        <span class="status-label">Playlist</span>
+                        <span class="status-label">Layout:</span>
+                        <span class="status-name">{{ layout_presets.get(d.layout_preset, {}).label }} ({{ zones|length }} Zonen)</span>
+                    {% elif pl %}
+                        <span class="status-dot mode-playlist"></span>
+                        <span class="status-label">Playlist:</span>
                         <span class="status-name">{{ pl|length }} {{ 'Eintrag' if pl|length == 1 else 'Einträge' }}</span>
                     {% else %}
                         <span class="status-dot"></span>
@@ -416,7 +422,8 @@
                     </form>
                 </div>
 
-                <!-- Playlist column -->
+                {% if not is_multizone %}
+                <!-- Playlist column (Vollbild) -->
                 <div class="card-col-playlist">
                         <h3>Playlist</h3>
                         {% if not pl %}
@@ -482,6 +489,17 @@
                             </div>
                         </form>
                     </div>
+                {% else %}
+                <div class="card-col-playlist" style="background:#fdfdfe;padding:14px 16px;border-top:1px solid #eee;">
+                    <div style="display:flex;align-items:center;gap:10px;color:#495057;font-size:13px;background:#f0f4ff;padding:11px 14px;border-radius:6px;border:1px solid #dbe4ff;">
+                        <span style="font-size:18px;line-height:1;">ℹ️</span>
+                        <div>
+                            <strong>Mehr-Zonen-Layout aktiv ({{ layout_presets.get(d.layout_preset, {}).label }}):</strong><br>
+                            Die Inhalte dieses Displays werden über die Zonen-Playlists unten gesteuert. Die Vollbild-Playlist pausiert.
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
 
                 {% if d.layout_preset and d.layout_preset != 'fullscreen' %}
                 {% set zones = display_zones.get(d.id, []) %}
