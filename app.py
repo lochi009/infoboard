@@ -6,6 +6,8 @@ import glob as glob_module
 import subprocess
 import threading
 import shutil
+from datetime import datetime
+from functools import wraps
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests as http_requests
 from urllib.parse import urlparse, parse_qs
@@ -40,6 +42,11 @@ from models import (
     create_zone, delete_zone, update_zone_settings,
     get_zone_playlist_items, add_zone_playlist_item, remove_zone_playlist_item,
     update_zone_playlist_item_duration, reorder_zone_playlist_items,
+    get_all_users, get_user, get_user_by_username,
+    create_user, update_user, delete_user,
+    get_display_schedule, get_scheduled_user_for_display,
+    set_display_schedule, get_user_weekdays_for_display,
+    get_user_zone_permissions, has_user_zone_permission, set_user_zone_permissions,
 )
 
 app = Flask(__name__)
@@ -126,17 +133,98 @@ ALLOWED_EXTENSIONS = {
 }
 
 
+WEEKDAYS = ['Montag', 'Dienstag', 'Mittwoch', 'Donnerstag', 'Freitag', 'Samstag', 'Sonntag']
+WEEKDAYS_SHORT = ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So']
+
+
 class User(UserMixin):
-    def __init__(self, username):
-        self.id = username
+    def __init__(self, session_id, db_id, username, display_name, role='user'):
+        self.id = session_id
+        self.db_id = db_id
         self.username = username
+        self.display_name = display_name
+        self.role = role
+
+    @property
+    def is_admin(self):
+        return self.role == 'admin'
 
 
 @login_manager.user_loader
 def load_user(user_id):
-    if user_id == config.admin_username:
-        return User(user_id)
+    if user_id == config.admin_username or user_id == f'admin:{config.admin_username}':
+        return User(f'admin:{config.admin_username}', 0, config.admin_username, 'Administrator', role='admin')
+    if isinstance(user_id, str) and user_id.startswith('user:'):
+        try:
+            uid = int(user_id.split(':', 1)[1])
+        except ValueError:
+            return None
+        row = get_user(uid)
+        if row:
+            return User(f'user:{row["id"]}', row['id'], row['username'], row['display_name'], role=row['role'])
     return None
+
+
+def admin_required(f):
+    @wraps(f)
+    @login_required
+    def decorated(*args, **kwargs):
+        if not current_user.is_admin:
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({'ok': False, 'error': 'Keine Berechtigung'}), 403
+            flash('Diese Aktion ist nur für Administratoren verfügbar.', 'error')
+            return redirect(url_for('admin'))
+        return f(*args, **kwargs)
+    return decorated
+
+
+def _can_access_media(media):
+    if not media:
+        return False
+    if current_user.is_admin:
+        return True
+    return media['user_id'] == current_user.db_id
+
+
+def _resolve_playlist_user_id(display_id, zone_index):
+    """Return user_id whose playlist should be modified, or abort 403 if unauthorized."""
+    if current_user.is_admin:
+        uid = request.form.get('user_id', type=int)
+        if uid is None and request.is_json:
+            uid = (request.json or {}).get('user_id')
+        if uid is None:
+            uid = request.args.get('user_id', 0, type=int)
+        return uid or 0
+    if not has_user_zone_permission(current_user.db_id, display_id, zone_index):
+        abort(403)
+    return current_user.db_id
+
+
+def _delete_media_files(result):
+    """Remove physical upload, render, and gallery image files returned by delete_media."""
+    if not result:
+        return
+    if result['filename']:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], result['filename'])
+        if os.path.exists(filepath):
+            try:
+                os.remove(filepath)
+            except OSError:
+                pass
+    for display_id, render_filename in result['renders']:
+        render_path = os.path.join(RENDERS_FOLDER, str(display_id), render_filename)
+        if os.path.exists(render_path):
+            try:
+                os.remove(render_path)
+            except OSError:
+                pass
+    for gal_filename in result.get('gallery_images', []):
+        gal_path = os.path.join(app.config['UPLOAD_FOLDER'], gal_filename)
+        if os.path.exists(gal_path):
+            try:
+                os.remove(gal_path)
+            except OSError:
+                pass
 
 
 def verify_password(password):
@@ -514,6 +602,27 @@ def _media_to_item(media, display, spread_mode='none'):
     return item
 
 
+def _effective_user_for_zone(display_id, zone_index):
+    """Return today's scheduled user_id if permitted for zone_index, else 0 (Admin)."""
+    today_wd = datetime.now().weekday()
+    scheduled_uid = get_scheduled_user_for_display(display_id, today_wd)
+    if scheduled_uid > 0 and has_user_zone_permission(scheduled_uid, display_id, zone_index):
+        return scheduled_uid
+    return 0
+
+
+def _serialize_playlist(playlist, display):
+    items = []
+    for pi in playlist:
+        media = get_media(pi['media_id'])
+        if not media:
+            continue
+        item = _media_to_item(media, display, pi['spread_mode'])
+        item['duration'] = pi['duration']
+        items.append(item)
+    return items
+
+
 @app.route('/api/display/<slug>')
 def display_api(slug):
     """API endpoint: current content info for a display."""
@@ -530,22 +639,18 @@ def display_api(slug):
     }
 
     # --- Playlist mode ---
-    playlist = get_playlist_items(display['id'])
+    effective_uid = _effective_user_for_zone(display['id'], 0)
+    playlist = get_playlist_items(display['id'], user_id=effective_uid)
+    if not playlist and effective_uid != 0:
+        playlist = get_playlist_items(display['id'], user_id=0)
     if playlist:
-        items = []
-        for pi in playlist:
-            media = get_media(pi['media_id'])
-            if not media:
-                continue
-            item = _media_to_item(media, display, pi['spread_mode'])
-            item['duration'] = pi['duration']
-            items.append(item)
+        items = _serialize_playlist(playlist, display)
         if items:
             return jsonify({**common, 'mode': 'playlist', 'items': items})
 
-    # --- Single item mode ---
+    # --- Single item mode (Admin fallback only) ---
     selected_id = display['selected_media_id']
-    media = get_newest_media() if selected_id == 0 else get_media(selected_id)
+    media = get_newest_media(user_id=0) if selected_id == 0 else get_media(selected_id)
     if not media:
         return jsonify({'error': 'Kein Inhalt verfügbar'}), 404
 
@@ -586,22 +691,18 @@ def zone_api(slug, zone_index):
     }
 
     # Playlist mode
-    playlist = get_zone_playlist_items(zone['id'])
+    effective_uid = _effective_user_for_zone(display['id'], zone_index)
+    playlist = get_zone_playlist_items(zone['id'], user_id=effective_uid)
+    if not playlist and effective_uid != 0:
+        playlist = get_zone_playlist_items(zone['id'], user_id=0)
     if playlist:
-        items = []
-        for pi in playlist:
-            media = get_media(pi['media_id'])
-            if not media:
-                continue
-            item = _media_to_item(media, display, pi['spread_mode'])
-            item['duration'] = pi['duration']
-            items.append(item)
+        items = _serialize_playlist(playlist, display)
         if items:
             return jsonify({**common, 'mode': 'playlist', 'items': items})
 
-    # Single item mode
+    # Single item mode (Admin fallback only)
     selected_id = zone['selected_media_id']
-    media = get_newest_media() if selected_id == 0 else get_media(selected_id)
+    media = get_newest_media(user_id=0) if selected_id == 0 else get_media(selected_id)
     if not media:
         return jsonify({'error': 'Kein Inhalt verfügbar'}), 404
 
@@ -626,8 +727,15 @@ def current_pdf_legacy():
 @app.route('/api/render-jobs')
 @login_required
 def api_render_jobs():
-    """Return all active/recent render jobs so the admin UI can show progress."""
-    return jsonify(render_jobs)
+    """Return active/recent render jobs visible to the current user."""
+    if current_user.is_admin:
+        return jsonify(render_jobs)
+    visible = {}
+    for mid, job in render_jobs.items():
+        media = get_media(mid)
+        if media and media['user_id'] == current_user.db_id:
+            visible[mid] = job
+    return jsonify(visible)
 
 
 @app.route('/uploads/<filename>')
@@ -714,10 +822,14 @@ def login():
         return redirect(url_for('admin'))
 
     if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
+        username = (request.form.get('username') or '').strip()
+        password = request.form.get('password') or ''
         if username == config.admin_username and verify_password(password):
-            login_user(User(username))
+            login_user(User(f'admin:{config.admin_username}', 0, config.admin_username, 'Administrator', role='admin'))
+            return redirect(url_for('admin'))
+        db_user = get_user_by_username(username)
+        if db_user and bcrypt.checkpw(password.encode('utf-8'), db_user['password_hash'].encode('utf-8')):
+            login_user(User(f'user:{db_user["id"]}', db_user['id'], db_user['username'], db_user['display_name'], role=db_user['role']))
             return redirect(url_for('admin'))
         flash('Ungültiger Benutzername oder Passwort', 'error')
 
@@ -740,23 +852,63 @@ def admin():
     per_page = 10
     offset = (page - 1) * per_page
 
-    media_list = get_all_media(limit=per_page, offset=offset)
-    total_media = get_media_count()
-    total_pages = (total_media + per_page - 1) // per_page
-
+    is_admin = current_user.is_admin
     displays = get_all_displays()
 
-    # For each display, resolve what's currently showing
+    if is_admin:
+        users = get_all_users()
+        users_by_id = {u['id']: u for u in users}
+        view_user_id = request.args.get('view_user', 0, type=int)
+        if view_user_id not in users_by_id:
+            view_user_id = 0
+        target_user_id = view_user_id
+        media_list = get_all_media(limit=per_page, offset=offset)
+        total_media = get_media_count()
+        all_media = get_all_media(user_id=target_user_id) if target_user_id > 0 else get_all_media()
+    else:
+        users = []
+        users_by_id = {}
+        view_user_id = current_user.db_id
+        target_user_id = current_user.db_id
+        media_list = get_all_media(limit=per_page, offset=offset, user_id=current_user.db_id)
+        total_media = get_media_count(user_id=current_user.db_id)
+        all_media = get_all_media(user_id=current_user.db_id)
+
+    total_pages = (total_media + per_page - 1) // per_page
+
+    # For each display, resolve what's currently showing (Admin fallback)
     display_current = {}
     for d in displays:
         sid = d['selected_media_id']
-        display_current[d['id']] = get_newest_media() if sid == 0 else get_media(sid)
+        display_current[d['id']] = get_newest_media(user_id=0) if sid == 0 else get_media(sid)
 
     auto_cleanup_enabled = get_setting('auto_cleanup_enabled', 'true')
     auto_cleanup_days = int(get_setting('auto_cleanup_days', '180'))
 
-    display_playlists = {d['id']: get_playlist_items(d['id']) for d in displays}
-    all_media = get_all_media()  # unpaginated, for playlist dropdowns
+    display_schedules = {d['id']: get_display_schedule(d['id']) for d in displays}
+    today_weekday = datetime.now().weekday()
+    user_zone_perms = {
+        u['id']: {d['id']: get_user_zone_permissions(u['id'], d['id']) for d in displays}
+        for u in users
+    }
+
+    target_zone_perms = {}
+    for d in displays:
+        if target_user_id > 0:
+            target_zone_perms[d['id']] = get_user_zone_permissions(target_user_id, d['id'])
+        else:
+            zone_cnt = LAYOUT_PRESETS.get(d['layout_preset'] or 'fullscreen', {'zones': 1})['zones']
+            target_zone_perms[d['id']] = set(range(zone_cnt))
+
+    user_display_weekdays = {
+        d['id']: get_user_weekdays_for_display(target_user_id, d['id']) if target_user_id > 0 else []
+        for d in displays
+    }
+
+    display_playlists = {
+        d['id']: get_playlist_items(d['id'], user_id=target_user_id)
+        for d in displays
+    }
 
     youtube_params = {
         item['id']: parse_youtube_params(item['url'])
@@ -766,49 +918,75 @@ def admin():
 
     pdf_media_page_counts = get_all_pdf_page_counts()  # {media_id: page_count} for media library
 
-    pdf_page_counts = {}
-    for d in displays:
-        pdf_page_counts[d['id']] = {
-            pi['media_id']: get_pdf_page_count(pi['media_id'], d['id'])
-            for pi in display_playlists[d['id']]
-            if pi['content_type'] == 'pdf'
-        }
-
+    gallery_source = get_all_media() if is_admin else all_media
     gallery_images_map = {
         item['id']: get_gallery_images(item['id'])
-        for item in all_media
+        for item in gallery_source
         if item['content_type'] == 'gallery'
     }
     gallery_image_counts = {mid: len(imgs) for mid, imgs in gallery_images_map.items()}
 
     display_thumbnails = {}
     for d in displays:
-        playlist = display_playlists[d['id']]
-        if playlist:
-            first_media = get_media(playlist[0]['media_id'])
-            thumb = get_thumbnail_url(first_media, d['id'], gallery_images_map)
+        if 0 in target_zone_perms[d['id']]:
+            playlist = display_playlists[d['id']]
+            if playlist:
+                first_media = get_media(playlist[0]['media_id'])
+                thumb = get_thumbnail_url(first_media, d['id'], gallery_images_map)
+            elif target_user_id == 0:
+                thumb = get_thumbnail_url(display_current.get(d['id']), d['id'], gallery_images_map)
+            else:
+                thumb = None
         else:
-            thumb = get_thumbnail_url(display_current.get(d['id']), d['id'], gallery_images_map)
+            thumb = None
         display_thumbnails[d['id']] = thumb
 
     display_zones = {d['id']: get_zones_for_display(d['id']) for d in displays}
     zone_playlists = {}
     for d in displays:
         for zone in display_zones[d['id']]:
-            zone_playlists[zone['id']] = get_zone_playlist_items(zone['id'])
+            zone_playlists[zone['id']] = get_zone_playlist_items(zone['id'], user_id=target_user_id)
+
+    pdf_page_counts = {}
+    for d in displays:
+        counts = {
+            pi['media_id']: get_pdf_page_count(pi['media_id'], d['id'])
+            for pi in display_playlists[d['id']]
+            if pi['content_type'] == 'pdf'
+        }
+        for zone in display_zones[d['id']]:
+            for pi in zone_playlists[zone['id']]:
+                if pi['content_type'] == 'pdf' and pi['media_id'] not in counts:
+                    counts[pi['media_id']] = get_pdf_page_count(pi['media_id'], d['id'])
+        pdf_page_counts[d['id']] = counts
 
     zone_thumbnails = {}
     for d in displays:
         for zone in display_zones[d['id']]:
-            zpl = zone_playlists.get(zone['id'], [])
-            if zpl:
-                first_media = get_media(zpl[0]['media_id'])
-                zone_thumbnails[zone['id']] = get_thumbnail_url(first_media, d['id'], gallery_images_map)
+            if zone['zone_index'] in target_zone_perms[d['id']]:
+                zpl = zone_playlists.get(zone['id'], [])
+                if zpl:
+                    first_media = get_media(zpl[0]['media_id'])
+                    zone_thumbnails[zone['id']] = get_thumbnail_url(first_media, d['id'], gallery_images_map)
+                else:
+                    zone_thumbnails[zone['id']] = None
             else:
                 zone_thumbnails[zone['id']] = None
 
     return render_template(
         'admin.html',
+        is_admin=is_admin,
+        users=users,
+        users_by_id=users_by_id,
+        view_user_id=view_user_id,
+        target_user_id=target_user_id,
+        weekdays=WEEKDAYS,
+        weekdays_short=WEEKDAYS_SHORT,
+        today_weekday=today_weekday,
+        display_schedules=display_schedules,
+        user_zone_perms=user_zone_perms,
+        target_zone_perms=target_zone_perms,
+        user_display_weekdays=user_display_weekdays,
         displays=displays,
         display_current=display_current,
         display_playlists=display_playlists,
@@ -834,7 +1012,7 @@ def admin():
 # --- Display management ---
 
 @app.route('/admin/display/create', methods=['POST'])
-@login_required
+@admin_required
 def create_display_route():
     name = request.form.get('name', '').strip()
     slug = request.form.get('slug', '').strip().lower()
@@ -875,7 +1053,7 @@ def create_display_route():
 
 
 @app.route('/admin/display/<int:display_id>/settings', methods=['POST'])
-@login_required
+@admin_required
 def update_display_settings(display_id):
     display = get_display(display_id)
     if not display:
@@ -938,7 +1116,7 @@ def update_display_settings(display_id):
 
 
 @app.route('/admin/display/<int:display_id>/delete', methods=['POST'])
-@login_required
+@admin_required
 def delete_display_route(display_id):
     displays = get_all_displays()
     if len(displays) <= 1:
@@ -974,15 +1152,16 @@ def playlist_add(display_id):
             return jsonify({'ok': False, 'error': 'Display nicht gefunden'}), 404
         flash('Display nicht gefunden', 'error')
         return redirect(url_for('admin'))
+    target_uid = _resolve_playlist_user_id(display_id, 0)
     media_id = request.form.get('media_id', type=int)
     duration = max(1, request.form.get('duration', 10, type=int))
     media = get_media(media_id) if media_id else None
-    if not media:
+    if not media or (not current_user.is_admin and media['user_id'] != current_user.db_id):
         if is_ajax:
             return jsonify({'ok': False, 'error': 'Inhalt nicht gefunden'}), 404
         flash('Inhalt nicht gefunden', 'error')
         return redirect(url_for('admin'))
-    new_id = add_playlist_item(display_id, media_id, duration)
+    new_id = add_playlist_item(display_id, media_id, duration, user_id=target_uid)
     if is_ajax:
         return jsonify({
             'ok': True,
@@ -998,7 +1177,8 @@ def playlist_add(display_id):
 @app.route('/admin/display/<int:display_id>/playlist/item/<int:item_id>/remove', methods=['POST'])
 @login_required
 def playlist_remove(display_id, item_id):
-    remove_playlist_item(item_id, display_id)
+    target_uid = _resolve_playlist_user_id(display_id, 0)
+    remove_playlist_item(item_id, display_id, user_id=target_uid)
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('admin'))
@@ -1007,6 +1187,7 @@ def playlist_remove(display_id, item_id):
 @app.route('/admin/display/<int:display_id>/playlist/item/<int:item_id>/duration', methods=['POST'])
 @login_required
 def playlist_update_dur(display_id, item_id):
+    target_uid = _resolve_playlist_user_id(display_id, 0)
     duration = request.form.get('duration', type=int)
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
     if not duration or duration < 1:
@@ -1014,7 +1195,7 @@ def playlist_update_dur(display_id, item_id):
             return jsonify({'ok': False, 'error': 'Ungültige Dauer'}), 400
         flash('Ungültige Dauer', 'error')
         return redirect(url_for('admin'))
-    update_playlist_item_duration(item_id, display_id, duration)
+    update_playlist_item_duration(item_id, display_id, duration, user_id=target_uid)
     if is_ajax:
         return jsonify({'ok': True})
     return redirect(url_for('admin'))
@@ -1023,18 +1204,20 @@ def playlist_update_dur(display_id, item_id):
 @app.route('/admin/display/<int:display_id>/playlist/item/<int:item_id>/spread', methods=['POST'])
 @login_required
 def playlist_update_spread(display_id, item_id):
+    target_uid = _resolve_playlist_user_id(display_id, 0)
     spread_mode = request.form.get('spread_mode', 'none')
     if spread_mode not in ('none', 'paired', 'book'):
         return jsonify({'ok': False}), 400
-    update_playlist_item_spread_mode(item_id, display_id, spread_mode)
+    update_playlist_item_spread_mode(item_id, display_id, spread_mode, user_id=target_uid)
     return jsonify({'ok': True})
 
 
 @app.route('/admin/display/<int:display_id>/playlist/reorder', methods=['POST'])
 @login_required
 def playlist_reorder(display_id):
-    ordered_ids = request.json.get('order', [])
-    reorder_playlist_items(display_id, ordered_ids)
+    target_uid = _resolve_playlist_user_id(display_id, 0)
+    ordered_ids = (request.json or {}).get('order', [])
+    reorder_playlist_items(display_id, ordered_ids, user_id=target_uid)
     return jsonify({'ok': True})
 
 
@@ -1043,7 +1226,8 @@ def playlist_reorder(display_id):
 def playlist_move_item(display_id, item_id, direction):
     if direction not in ('up', 'down'):
         abort(400)
-    move_playlist_item(item_id, display_id, -1 if direction == 'up' else 1)
+    target_uid = _resolve_playlist_user_id(display_id, 0)
+    move_playlist_item(item_id, display_id, -1 if direction == 'up' else 1, user_id=target_uid)
     return redirect(url_for('admin'))
 
 
@@ -1054,7 +1238,7 @@ def gallery_create():
     if not name:
         flash('Name darf nicht leer sein', 'error')
         return redirect(url_for('admin'))
-    add_gallery(name)
+    add_gallery(name, user_id=current_user.db_id)
     flash(f'Galerie "{name}" erstellt', 'success')
     return redirect(url_for('admin'))
 
@@ -1064,7 +1248,7 @@ def gallery_create():
 def gallery_upload(gallery_id):
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
     media = get_media(gallery_id)
-    if not media or media['content_type'] != 'gallery':
+    if not media or media['content_type'] != 'gallery' or not _can_access_media(media):
         if is_ajax:
             return jsonify({'ok': False, 'error': 'Galerie nicht gefunden'}), 404
         flash('Galerie nicht gefunden', 'error')
@@ -1095,6 +1279,9 @@ def gallery_upload(gallery_id):
 @app.route('/admin/gallery/<int:gallery_id>/image/<int:image_id>/remove', methods=['POST'])
 @login_required
 def gallery_remove_image(gallery_id, image_id):
+    media = get_media(gallery_id)
+    if not _can_access_media(media):
+        abort(403)
     filename = remove_gallery_image(image_id, gallery_id)
     if filename:
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
@@ -1111,13 +1298,16 @@ def gallery_remove_image(gallery_id, image_id):
 @app.route('/admin/gallery/<int:gallery_id>/image/reorder', methods=['POST'])
 @login_required
 def gallery_reorder_images(gallery_id):
-    ordered_ids = request.json.get('order', [])
+    media = get_media(gallery_id)
+    if not _can_access_media(media):
+        abort(403)
+    ordered_ids = (request.json or {}).get('order', [])
     reorder_gallery_images(gallery_id, ordered_ids)
     return jsonify({'ok': True})
 
 
 @app.route('/admin/display/<int:display_id>/regenerate', methods=['POST'])
-@login_required
+@admin_required
 def regenerate_renders(display_id):
     display = get_display(display_id)
     if not display:
@@ -1169,7 +1359,10 @@ def upload_file():
     file.save(filepath)
     file_size = os.path.getsize(filepath)
 
-    media_id = add_media(content_type, original_name, filename=unique_filename, file_size=file_size)
+    media_id = add_media(
+        content_type, original_name, filename=unique_filename,
+        file_size=file_size, user_id=current_user.db_id,
+    )
 
     # For PDFs: render in background so the upload response is immediate
     if content_type == 'pdf':
@@ -1205,18 +1398,16 @@ def add_url():
     content_type = detect_url_content_type(raw_url)
     final_url = make_youtube_embed(raw_url) if content_type == 'youtube' else raw_url
 
-    add_media(content_type, name, url=final_url)
+    add_media(content_type, name, url=final_url, user_id=current_user.db_id)
     flash(f'"{name}" erfolgreich hinzugefügt', 'success')
     return redirect(url_for('admin'))
-
-
 
 
 @app.route('/admin/media/<int:media_id>/url-options', methods=['POST'])
 @login_required
 def url_options(media_id):
     media = get_media(media_id)
-    if not media or media['content_type'] != 'url':
+    if not media or media['content_type'] != 'url' or not _can_access_media(media):
         flash('Inhalt nicht gefunden oder kein Website-Typ', 'error')
         return redirect(url_for('admin'))
 
@@ -1234,7 +1425,7 @@ def url_options(media_id):
 @login_required
 def youtube_options(media_id):
     media = get_media(media_id)
-    if not media or media['content_type'] != 'youtube':
+    if not media or media['content_type'] != 'youtube' or not _can_access_media(media):
         flash('Inhalt nicht gefunden oder kein YouTube-Typ', 'error')
         return redirect(url_for('admin'))
 
@@ -1270,7 +1461,11 @@ def rename_media(media_id):
         return redirect(url_for('admin'))
 
     media = get_media(media_id)
-    if media and media['content_type'] == 'pdf' and not new_name.lower().endswith('.pdf'):
+    if not _can_access_media(media):
+        flash('Keine Berechtigung', 'error')
+        return redirect(url_for('admin'))
+
+    if media['content_type'] == 'pdf' and not new_name.lower().endswith('.pdf'):
         new_name += '.pdf'
 
     update_media_name(media_id, new_name)
@@ -1281,44 +1476,23 @@ def rename_media(media_id):
 @app.route('/admin/delete/<int:media_id>', methods=['POST'])
 @login_required
 def delete_media_item(media_id):
+    media = get_media(media_id)
+    if not _can_access_media(media):
+        flash('Inhalt nicht gefunden oder keine Berechtigung', 'error')
+        return redirect(url_for('admin'))
+
     result = delete_media(media_id)
     if not result:
         flash('Inhalt nicht gefunden', 'error')
         return redirect(url_for('admin'))
 
-    # Delete physical file
-    if result['filename']:
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], result['filename'])
-        if os.path.exists(filepath):
-            try:
-                os.remove(filepath)
-            except OSError:
-                pass
-
-    # Delete render files
-    for display_id, render_filename in result['renders']:
-        render_path = os.path.join(RENDERS_FOLDER, str(display_id), render_filename)
-        if os.path.exists(render_path):
-            try:
-                os.remove(render_path)
-            except OSError:
-                pass
-
-    # Delete gallery image files
-    for gal_filename in result.get('gallery_images', []):
-        gal_path = os.path.join(app.config['UPLOAD_FOLDER'], gal_filename)
-        if os.path.exists(gal_path):
-            try:
-                os.remove(gal_path)
-            except OSError:
-                pass
-
+    _delete_media_files(result)
     flash('Inhalt erfolgreich gelöscht', 'success')
     return redirect(url_for('admin'))
 
 
 @app.route('/admin/settings', methods=['POST'])
-@login_required
+@admin_required
 def update_global_settings():
     auto_cleanup_enabled = request.form.get('auto_cleanup_enabled', '').strip()
     auto_cleanup_days = request.form.get('auto_cleanup_days', type=int)
@@ -1341,7 +1515,7 @@ def update_global_settings():
 
 
 @app.route('/admin/cleanup', methods=['POST'])
-@login_required
+@admin_required
 def manual_cleanup():
     deleted_count = cleanup_old_media(app.config['UPLOAD_FOLDER'])
     if deleted_count > 0:
@@ -1354,7 +1528,7 @@ def manual_cleanup():
 # --- Zone management ---
 
 @app.route('/admin/display/<int:display_id>/layout', methods=['POST'])
-@login_required
+@admin_required
 def update_display_layout(display_id):
     display = get_display(display_id)
     if not display:
@@ -1385,22 +1559,27 @@ def update_display_layout(display_id):
     return redirect(url_for('admin'))
 
 
-
 @app.route('/admin/zone/<int:zone_id>/playlist/add', methods=['POST'])
 @login_required
 def zone_playlist_add(zone_id):
+    is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
     zone = get_zone(zone_id)
     if not zone:
+        if is_ajax:
+            return jsonify({'ok': False, 'error': 'Zone nicht gefunden'}), 404
         flash('Zone nicht gefunden', 'error')
         return redirect(url_for('admin'))
+    target_uid = _resolve_playlist_user_id(zone['display_id'], zone['zone_index'])
     media_id = request.form.get('media_id', type=int)
     duration = max(1, request.form.get('duration', 10, type=int))
     media = get_media(media_id) if media_id else None
-    if not media:
+    if not media or (not current_user.is_admin and media['user_id'] != current_user.db_id):
+        if is_ajax:
+            return jsonify({'ok': False, 'error': 'Inhalt nicht gefunden'}), 404
         flash('Inhalt nicht gefunden', 'error')
         return redirect(url_for('admin'))
-    new_id = add_zone_playlist_item(zone_id, media_id, duration)
-    if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+    new_id = add_zone_playlist_item(zone_id, media_id, duration, user_id=target_uid)
+    if is_ajax:
         return jsonify({
             'ok': True, 'id': new_id,
             'original_name': media['original_name'],
@@ -1414,7 +1593,11 @@ def zone_playlist_add(zone_id):
 @app.route('/admin/zone/<int:zone_id>/playlist/item/<int:item_id>/remove', methods=['POST'])
 @login_required
 def zone_playlist_remove(zone_id, item_id):
-    remove_zone_playlist_item(item_id, zone_id)
+    zone = get_zone(zone_id)
+    if not zone:
+        abort(404)
+    target_uid = _resolve_playlist_user_id(zone['display_id'], zone['zone_index'])
+    remove_zone_playlist_item(item_id, zone_id, user_id=target_uid)
     if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
         return jsonify({'ok': True})
     return redirect(url_for('admin'))
@@ -1423,6 +1606,10 @@ def zone_playlist_remove(zone_id, item_id):
 @app.route('/admin/zone/<int:zone_id>/playlist/item/<int:item_id>/duration', methods=['POST'])
 @login_required
 def zone_playlist_update_dur(zone_id, item_id):
+    zone = get_zone(zone_id)
+    if not zone:
+        abort(404)
+    target_uid = _resolve_playlist_user_id(zone['display_id'], zone['zone_index'])
     duration = request.form.get('duration', type=int)
     is_ajax = request.headers.get('X-Requested-With') == 'XMLHttpRequest'
     if not duration or duration < 1:
@@ -1430,7 +1617,7 @@ def zone_playlist_update_dur(zone_id, item_id):
             return jsonify({'ok': False, 'error': 'Ungültige Dauer'}), 400
         flash('Ungültige Dauer', 'error')
         return redirect(url_for('admin'))
-    update_zone_playlist_item_duration(item_id, zone_id, duration)
+    update_zone_playlist_item_duration(item_id, zone_id, duration, user_id=target_uid)
     if is_ajax:
         return jsonify({'ok': True})
     return redirect(url_for('admin'))
@@ -1439,19 +1626,152 @@ def zone_playlist_update_dur(zone_id, item_id):
 @app.route('/admin/zone/<int:zone_id>/playlist/item/<int:item_id>/spread', methods=['POST'])
 @login_required
 def zone_playlist_update_spread(zone_id, item_id):
+    zone = get_zone(zone_id)
+    if not zone:
+        abort(404)
+    target_uid = _resolve_playlist_user_id(zone['display_id'], zone['zone_index'])
     spread_mode = request.form.get('spread_mode', 'none')
     if spread_mode not in ('none', 'paired', 'book'):
         return jsonify({'ok': False}), 400
-    update_zone_playlist_item_spread_mode(item_id, zone_id, spread_mode)
+    update_zone_playlist_item_spread_mode(item_id, zone_id, spread_mode, user_id=target_uid)
     return jsonify({'ok': True})
 
 
 @app.route('/admin/zone/<int:zone_id>/playlist/reorder', methods=['POST'])
 @login_required
 def zone_playlist_reorder(zone_id):
-    ordered_ids = request.json.get('order', [])
-    reorder_zone_playlist_items(zone_id, ordered_ids)
+    zone = get_zone(zone_id)
+    if not zone:
+        abort(404)
+    target_uid = _resolve_playlist_user_id(zone['display_id'], zone['zone_index'])
+    ordered_ids = (request.json or {}).get('order', [])
+    reorder_zone_playlist_items(zone_id, ordered_ids, user_id=target_uid)
     return jsonify({'ok': True})
+
+
+# --- User & Schedule management ---
+
+@app.route('/admin/users/create', methods=['POST'])
+@admin_required
+def users_create():
+    display_name = request.form.get('display_name', '').strip()
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password') or ''
+
+    if not display_name or not username or not password:
+        flash('Bezeichnung, Benutzername und Passwort sind erforderlich', 'error')
+        return redirect(url_for('admin'))
+
+    if username.lower() == config.admin_username.lower() or get_user_by_username(username):
+        flash(f'Benutzername "{username}" ist bereits vergeben', 'error')
+        return redirect(url_for('admin'))
+
+    pw_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(rounds=12)).decode('utf-8')
+    create_user(username, pw_hash, display_name, role='user')
+    flash(f'Benutzer "{display_name}" erstellt. Bitte unten Bereiche und Wochentage festlegen.', 'success')
+    return redirect(url_for('admin'))
+
+
+@app.route('/admin/users/<int:user_id>/update', methods=['POST'])
+@admin_required
+def users_update(user_id):
+    user = get_user(user_id)
+    if not user:
+        flash('Benutzer nicht gefunden', 'error')
+        return redirect(url_for('admin'))
+
+    display_name = request.form.get('display_name', '').strip()
+    username = request.form.get('username', '').strip()
+    password = request.form.get('password') or ''
+
+    if not display_name or not username:
+        flash('Bezeichnung und Benutzername dürfen nicht leer sein', 'error')
+        return redirect(url_for('admin'))
+
+    if username.lower() == config.admin_username.lower():
+        flash('Dieser Benutzername ist für den Administrator reserviert', 'error')
+        return redirect(url_for('admin'))
+
+    existing = get_user_by_username(username)
+    if existing and existing['id'] != user_id:
+        flash(f'Benutzername "{username}" ist bereits vergeben', 'error')
+        return redirect(url_for('admin'))
+
+    pw_hash = (
+        bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt(rounds=12)).decode('utf-8')
+        if password else None
+    )
+    update_user(user_id, username=username, display_name=display_name, password_hash=pw_hash)
+    flash(f'Benutzer "{display_name}" aktualisiert', 'success')
+    return redirect(url_for('admin'))
+
+
+@app.route('/admin/users/<int:user_id>/delete', methods=['POST'])
+@admin_required
+def users_delete(user_id):
+    user = get_user(user_id)
+    if not user:
+        flash('Benutzer nicht gefunden', 'error')
+        return redirect(url_for('admin'))
+
+    cleanups = delete_user(user_id)
+    for res in cleanups:
+        _delete_media_files(res)
+
+    flash(f'Benutzer "{user["display_name"]}" und zugehörige Inhalte gelöscht', 'success')
+    return redirect(url_for('admin'))
+
+
+@app.route('/admin/users/<int:user_id>/access', methods=['POST'])
+@admin_required
+def users_access(user_id):
+    user = get_user(user_id)
+    if not user:
+        flash('Benutzer nicht gefunden', 'error')
+        return redirect(url_for('admin'))
+
+    for d in get_all_displays():
+        did = d['id']
+        # Zone permissions
+        zone_indices = [
+            int(z) for z in request.form.getlist(f'zones_{did}')
+            if z.isdigit()
+        ]
+        set_user_zone_permissions(user_id, did, zone_indices)
+
+        # Weekday assignments
+        checked_weekdays = {
+            int(w) for w in request.form.getlist(f'weekdays_{did}')
+            if w.isdigit() and 0 <= int(w) <= 6
+        }
+        current_sched = get_display_schedule(did)
+        for wd in range(7):
+            if wd in checked_weekdays:
+                set_display_schedule(did, wd, user_id)
+            elif current_sched.get(wd) == user_id:
+                set_display_schedule(did, wd, 0)
+
+    flash(f'Freigaben & Wochentage für "{user["display_name"]}" gespeichert', 'success')
+    return redirect(url_for('admin'))
+
+
+@app.route('/admin/display/<int:display_id>/schedule', methods=['POST'])
+@admin_required
+def update_display_schedule_route(display_id):
+    display = get_display(display_id)
+    if not display:
+        flash('Display nicht gefunden', 'error')
+        return redirect(url_for('admin'))
+
+    valid_user_ids = {0} | {u['id'] for u in get_all_users()}
+    for wd in range(7):
+        uid = request.form.get(f'weekday_{wd}', 0, type=int)
+        if uid not in valid_user_ids:
+            uid = 0
+        set_display_schedule(display_id, wd, uid)
+
+    flash(f'Wochenplan für "{display["name"]}" gespeichert', 'success')
+    return redirect(url_for('admin'))
 
 
 if __name__ == '__main__':
