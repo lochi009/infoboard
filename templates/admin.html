@@ -82,7 +82,7 @@
         .form-group { flex: 1; min-width: 140px; }
         .form-group-sm { min-width: 80px; max-width: 120px; }
         label { display: block; margin-bottom: 5px; color: #555; font-weight: 500; font-size: 13px; }
-        input[type="text"], input[type="number"], input[type="url"], input[type="color"], select {
+        input[type="text"], input[type="password"], input[type="number"], input[type="url"], input[type="color"], select {
             width: 100%; padding: 9px 10px; border: 1px solid #ddd;
             border-radius: 5px; font-size: 14px;
         }
@@ -152,7 +152,21 @@
         }
         .card-col-playlist h3 { font-size: 13px; font-weight: 600; color: #888; text-transform: uppercase;
                                 letter-spacing: 0.05em; margin-bottom: 12px; }
-        .toggle-settings-btn.active { background: #495057; }
+        .toggle-settings-btn.active, .toggle-schedule-btn.active { background: #495057; }
+
+        /* User & schedule cards */
+        .user-card { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; margin-bottom: 20px; }
+        .user-card-header { padding: 14px 16px; background: #f8f9fa; display: flex; justify-content: space-between; align-items: center; gap: 10px; border-bottom: 1px solid #eee; flex-wrap: wrap; }
+        .user-card-body { padding: 16px; background: #fff; }
+        .access-display-box { background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 12px 14px; margin-bottom: 12px; }
+        .access-display-title { font-size: 14px; font-weight: 600; color: #333; margin-bottom: 10px; }
+        .checkbox-group { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+        .checkbox-pill { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; color: #444; cursor: pointer; font-weight: 500; margin-bottom: 0; background: #fff; padding: 5px 10px; border: 1px solid #ddd; border-radius: 5px; }
+        .checkbox-pill input[type="checkbox"] { width: auto; margin: 0; }
+        .checkbox-pill .hint { font-size: 11px; color: #999; font-weight: 400; }
+        .schedule-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; margin-bottom: 12px; }
+        .schedule-day-row { background: #fff; border: 1px solid #e1e4e8; border-radius: 5px; padding: 8px 10px; }
+        .schedule-day-row.is-today { border-color: #667eea; background: #f5f7ff; }
 
         /* Display card status bar */
         .display-card-status {
@@ -252,13 +266,16 @@
     {% set type_labels = {'pdf': 'PDF', 'image': 'Bild', 'video': 'Video', 'youtube': 'YouTube', 'url': 'Website', 'gallery': 'Galerie'} %}
 
     <header>
-        <h1>Infoboard Verwaltung</h1>
+        <h1>{{ 'Infoboard Verwaltung' if is_admin else 'Infoboard – ' ~ current_user.display_name }}</h1>
         <a href="{{ url_for('logout') }}" class="logout-btn">Abmelden</a>
     </header>
 
     <div class="tab-bar">
-        <button class="tab-btn active" data-tab="displays" onclick="switchTab('displays', this)">Displays</button>
-        <button class="tab-btn" data-tab="content" onclick="switchTab('content', this)">Inhalte</button>
+        <button class="tab-btn active" data-tab="displays" onclick="switchTab('displays', this)">{{ 'Displays' if is_admin else 'Meine Displays' }}</button>
+        <button class="tab-btn" data-tab="content" onclick="switchTab('content', this)">{{ 'Inhalte' if is_admin else 'Meine Inhalte' }}</button>
+        {% if is_admin %}
+        <button class="tab-btn" data-tab="users" onclick="switchTab('users', this)">Benutzer</button>
+        {% endif %}
     </div>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -273,14 +290,40 @@
     <!-- ===== DISPLAYS ===== -->
     <div class="section">
         <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
-            <h2 style="margin-bottom: 0;">Displays</h2>
+            <h2 style="margin-bottom: 0;">{{ 'Displays' if is_admin else 'Meine Displays' }}</h2>
+            {% if is_admin %}
             <button type="button" class="btn btn-sm btn-success" id="btn-new-display-top" onclick="toggleNewDisplayForm()">
                 + Neues Display
             </button>
+            {% endif %}
         </div>
+
+        {% if is_admin and users %}
+        <div class="form-bg" style="padding: 12px 16px; margin-bottom: 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px;">
+            <div style="font-size: 13px; color: #555;">
+                <strong>Playlist-Ansicht:</strong>
+                {% if view_user_id == 0 %}
+                    Administrator (Standard &amp; Fallback)
+                {% else %}
+                    Inhalte von <strong>{{ users_by_id[view_user_id].display_name }}</strong>
+                {% endif %}
+            </div>
+            <form method="GET" action="{{ url_for('admin') }}" style="display: flex; align-items: center; gap: 8px;">
+                <label for="view-user-select" style="margin: 0; white-space: nowrap;">Playlists bearbeiten für:</label>
+                <select id="view-user-select" name="view_user" onchange="this.form.submit()" style="width: auto; padding: 6px 10px; font-size: 13px;">
+                    <option value="0" {% if view_user_id == 0 %}selected{% endif %}>Administrator (Standard &amp; Fallback)</option>
+                    {% for u in users %}
+                    <option value="{{ u.id }}" {% if view_user_id == u.id %}selected{% endif %}>{{ u.display_name }} (@{{ u.username }})</option>
+                    {% endfor %}
+                </select>
+            </form>
+        </div>
+        {% endif %}
 
         <div class="display-cards">
             {% for d in displays %}
+            {% set permitted_zones = target_zone_perms.get(d.id, []) %}
+            {% set sched = display_schedules.get(d.id, {}) %}
             <div class="display-card">
                 <div class="display-card-header">
                     <div>
@@ -290,9 +333,12 @@
                             <a href="{{ url_for('display_by_slug', slug=d.slug) }}" target="_blank">/display/{{ d.slug }}</a>
                         </div>
                     </div>
+                    {% if is_admin %}
                     <div class="actions">
                         <button type="button" class="btn-sm btn-secondary toggle-settings-btn" id="btn-toggle-settings-{{ d.id }}"
                                 onclick="toggleDisplaySettings({{ d.id }})">⚙ Einstellungen ▾</button>
+                        <button type="button" class="btn-sm btn-secondary toggle-schedule-btn" id="btn-toggle-schedule-{{ d.id }}"
+                                onclick="toggleDisplaySchedule({{ d.id }})">📅 Wochenplan ▾</button>
                         <form method="POST" action="{{ url_for('regenerate_renders', display_id=d.id) }}"
                               onsubmit="return confirm('Alle PDFs für dieses Display neu rendern?');">
                             <button type="submit" class="btn-sm btn-secondary">PDFs neu rendern</button>
@@ -304,13 +350,18 @@
                         </form>
                         {% endif %}
                     </div>
+                    {% endif %}
                     {% set preset_info = layout_presets.get(d.layout_preset or 'fullscreen', layout_presets['fullscreen']) %}
                     {% set d_zones = display_zones.get(d.id, []) %}
                     <div class="display-preview">
                         {% for geo in preset_info.preview %}
                             {% set zi = loop.index0 %}
+                            {% set zone_allowed = (zi in permitted_zones) %}
                             {% set zone_obj = d_zones | selectattr('zone_index', 'equalto', zi) | first | default(none) %}
-                            {% if zone_obj %}
+                            {% if not zone_allowed %}
+                                {% set thumb = none %}
+                                {% set first_ct = none %}
+                            {% elif zone_obj %}
                                 {% set thumb = zone_thumbnails.get(zone_obj.id) %}
                                 {% set zpl = zone_playlists.get(zone_obj.id, []) %}
                                 {% set first_ct = zpl[0].content_type if zpl else none %}
@@ -323,7 +374,9 @@
                                 {% set first_ct = none %}
                             {% endif %}
                             <div class="pz" style="top:{{ geo.top }};left:{{ geo.left }};width:{{ geo.width }};height:{{ geo.height }};">
-                                {% if thumb %}
+                                {% if not zone_allowed %}
+                                    <div class="pz-empty" style="background:#cfd4da;color:#666;font-size:10px;font-weight:600;">Admin</div>
+                                {% elif thumb %}
                                     <img src="{{ thumb }}" alt="">
                                 {% else %}
                                     <div class="pz-empty">
@@ -340,21 +393,40 @@
                 {% set is_multizone = d.layout_preset and d.layout_preset != 'fullscreen' %}
                 {% set pl = display_playlists.get(d.id, []) %}
                 <div class="display-card-status">
-                    {% if is_multizone %}
-                        {% set zones = display_zones.get(d.id, []) %}
-                        <span class="status-dot mode-playlist"></span>
-                        <span class="status-label">Layout:</span>
-                        <span class="status-name">{{ layout_presets.get(d.layout_preset, {}).label }} ({{ zones|length }} Zonen)</span>
-                    {% elif pl %}
-                        <span class="status-dot mode-playlist"></span>
-                        <span class="status-label">Playlist:</span>
-                        <span class="status-name">{{ pl|length }} {{ 'Eintrag' if pl|length == 1 else 'Einträge' }}</span>
+                    {% if is_admin %}
+                        {% if is_multizone %}
+                            {% set zones = display_zones.get(d.id, []) %}
+                            <span class="status-dot mode-playlist"></span>
+                            <span class="status-label">Layout:</span>
+                            <span class="status-name">{{ layout_presets.get(d.layout_preset, {}).label }} ({{ zones|length }} Zonen)</span>
+                        {% elif pl %}
+                            <span class="status-dot mode-playlist"></span>
+                            <span class="status-label">Playlist:</span>
+                            <span class="status-name">{{ pl|length }} {{ 'Eintrag' if pl|length == 1 else 'Einträge' }}</span>
+                        {% else %}
+                            <span class="status-dot"></span>
+                            <span class="status-label">{{ 'Admin-Fallback aktiv' if target_user_id > 0 else 'Neueste automatisch' }}</span>
+                        {% endif %}
+                        {% set today_uid = sched.get(today_weekday, 0) %}
+                        <span style="margin-left: auto; font-size: 12px; color: #555;">
+                            Heute ({{ weekdays[today_weekday] }}):
+                            <strong>{{ users_by_id[today_uid].display_name if today_uid in users_by_id else 'Administrator (Standard)' }}</strong>
+                        </span>
                     {% else %}
-                        <span class="status-dot"></span>
-                        <span class="status-label">Neueste automatisch</span>
+                        {% set my_days = user_display_weekdays.get(d.id, []) %}
+                        <span class="status-dot {{ 'mode-playlist' if my_days else '' }}"></span>
+                        <span class="status-label">Ihre Anzeigezeiten:</span>
+                        <span class="status-name">
+                            {% if my_days %}
+                                {% for wd in my_days %}{{ weekdays[wd] }}{% if not loop.last %}, {% endif %}{% endfor %}
+                            {% else %}
+                                Aktuell keine Wochentage zugewiesen
+                            {% endif %}
+                        </span>
                     {% endif %}
                 </div>
 
+                {% if is_admin %}
                 <!-- Settings drawer (hidden by default) -->
                 <div class="display-settings-drawer" id="display-settings-{{ d.id }}" style="display: none;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
@@ -427,12 +499,46 @@
                     </form>
                 </div>
 
+                <!-- Schedule drawer (hidden by default) -->
+                <div class="display-settings-drawer" id="display-schedule-{{ d.id }}" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <h3 style="margin-bottom:0;">Wochenplan für „{{ d.name }}“</h3>
+                        <button type="button" class="btn-sm btn-secondary" onclick="toggleDisplaySchedule({{ d.id }})" style="padding: 2px 8px; font-size: 11px;">✕ Schließen</button>
+                    </div>
+                    <form method="POST" action="{{ url_for('update_display_schedule_route', display_id=d.id) }}">
+                        <div class="schedule-grid">
+                            {% for wd in range(7) %}
+                            {% set assigned_uid = sched.get(wd, 0) %}
+                            <div class="schedule-day-row {{ 'is-today' if wd == today_weekday else '' }}">
+                                <label style="margin-bottom: 4px; font-weight: 600;">
+                                    {{ weekdays[wd] }}{% if wd == today_weekday %} <span style="color:#667eea;font-size:11px;">(Heute)</span>{% endif %}
+                                </label>
+                                <select name="weekday_{{ wd }}" style="padding: 6px 8px; font-size: 13px;">
+                                    <option value="0" {% if assigned_uid == 0 %}selected{% endif %}>Administrator (Standard)</option>
+                                    {% for u in users %}
+                                    <option value="{{ u.id }}" {% if assigned_uid == u.id %}selected{% endif %}>{{ u.display_name }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            {% endfor %}
+                        </div>
+                        <div style="display:flex;align-items:center;gap:10px;">
+                            <button type="submit" class="btn-success">Wochenplan speichern</button>
+                            <small style="color:#888;">Nicht freigegebene Zonen und leere Nutzer-Playlists werden automatisch vom Administrator bespielt.</small>
+                        </div>
+                    </form>
+                </div>
+                {% endif %}
+
                 {% if not is_multizone %}
+                {% if 0 in permitted_zones %}
                 <!-- Playlist column (Vollbild) -->
                 <div class="card-col-playlist">
                         <h3>Playlist</h3>
                         {% if not pl %}
-                        <p style="color:#999;font-size:13px;margin-bottom:12px;" class="playlist-empty-{{ d.id }}">Leer — neuester Inhalt wird automatisch angezeigt.</p>
+                        <p style="color:#999;font-size:13px;margin-bottom:12px;" class="playlist-empty-{{ d.id }}">
+                            {{ 'Leer — an Ihren Tagen wird automatisch der Administrator-Standard angezeigt.' if target_user_id > 0 else 'Leer — neuester Inhalt wird automatisch angezeigt.' }}
+                        </p>
                         {% endif %}
                         <table class="playlist-table" {% if not pl %}style="display:none;"{% endif %}>
                             <tbody class="playlist-sortable" data-display="{{ d.id }}">
@@ -495,12 +601,17 @@
                         </form>
                     </div>
                 {% else %}
+                <div class="card-col-playlist" style="background:#fafafa;padding:14px 16px;color:#777;font-size:13px;border-top:1px solid #eee;">
+                    🔒 <strong>Vollbild-Bereich:</strong> Dieser Bereich wird vom Administrator verwaltet.
+                </div>
+                {% endif %}
+                {% else %}
                 <div class="card-col-playlist" style="background:#fdfdfe;padding:14px 16px;border-top:1px solid #eee;">
                     <div style="display:flex;align-items:center;gap:10px;color:#495057;font-size:13px;background:#f0f4ff;padding:11px 14px;border-radius:6px;border:1px solid #dbe4ff;">
                         <span style="font-size:18px;line-height:1;">ℹ️</span>
                         <div>
                             <strong>Mehr-Zonen-Layout aktiv ({{ layout_presets.get(d.layout_preset, {}).label }}):</strong><br>
-                            Die Inhalte dieses Displays werden über die Zonen-Playlists unten gesteuert. Die Vollbild-Playlist pausiert.
+                            Die Inhalte dieses Displays werden über die Zonen-Playlists unten gesteuert.{% if is_admin %} Die Vollbild-Playlist pausiert.{% endif %}
                         </div>
                     </div>
                 </div>
@@ -512,13 +623,16 @@
                 <div class="zone-panels" style="border-top:1px solid #eee;">
                     {% for zone in zones %}
                     {% set zone_label = preset_info.zone_labels[zone.zone_index] if zone.zone_index < (preset_info.zone_labels|length) else ('Zone ' ~ (zone.zone_index + 1)) %}
+                    {% if zone.zone_index in permitted_zones %}
                     {% set zpl = zone_playlists.get(zone.id, []) %}
                     <div class="zone-panel" style="border-bottom:1px solid #f0f0f0;padding:12px 16px;">
                         <div style="font-size:13px;font-weight:700;color:#667eea;margin-bottom:10px;text-transform:uppercase;letter-spacing:0.05em;">
                             Zone {{ zone.zone_index + 1 }}: {{ zone_label }}
                         </div>
                         {% if not zpl %}
-                        <p style="color:#999;font-size:13px;margin-bottom:12px;" class="zone-playlist-empty-{{ zone.id }}">Leer — neuester Inhalt wird automatisch angezeigt.</p>
+                        <p style="color:#999;font-size:13px;margin-bottom:12px;" class="zone-playlist-empty-{{ zone.id }}">
+                            {{ 'Leer — an Ihren Tagen wird automatisch der Administrator-Standard angezeigt.' if target_user_id > 0 else 'Leer — neuester Inhalt wird automatisch angezeigt.' }}
+                        </p>
                         {% endif %}
                         <table class="playlist-table" {% if not zpl %}style="display:none;"{% endif %}>
                             <tbody class="zone-playlist-sortable" data-zone="{{ zone.id }}">
@@ -580,6 +694,11 @@
                             </div>
                         </form>
                     </div>
+                    {% else %}
+                    <div class="zone-panel" style="border-bottom:1px solid #f0f0f0;padding:12px 16px;background:#fafafa;color:#888;font-size:13px;">
+                        <strong style="color:#666;">Zone {{ zone.zone_index + 1 }}: {{ zone_label }}</strong> &mdash; 🔒 Wird vom Administrator verwaltet
+                    </div>
+                    {% endif %}
                     {% endfor %}
                 </div>
                 {% endif %}
@@ -588,6 +707,7 @@
             {% endfor %}
         </div>
 
+        {% if is_admin %}
         <div style="margin-top: 15px;">
             <button type="button" class="btn btn-secondary" id="btn-new-display-bottom" onclick="toggleNewDisplayForm()">
                 + Neues Display hinzufügen
@@ -625,6 +745,7 @@
                 </div>
             </form>
         </div>
+        {% endif %}
     </div>
     </div>{# end tab-displays #}
 
@@ -686,7 +807,7 @@
 
     <!-- ===== MEDIA LIBRARY ===== -->
     <div class="section">
-        <h2>Medienbibliothek</h2>
+        <h2>{{ 'Medienbibliothek' if is_admin else 'Meine Medienbibliothek' }}</h2>
 
         {% if media_list %}
             <table>
@@ -694,6 +815,7 @@
                     <tr>
                         <th>Name</th>
                         <th>Typ</th>
+                        {% if is_admin %}<th>Besitzer</th>{% endif %}
                         <th>Datum</th>
                         <th>Größe</th>
                         <th>Aktionen</th>
@@ -721,6 +843,11 @@
                                 {{ type_labels.get(item.content_type, item.content_type) }}
                             </span>
                         </td>
+                        {% if is_admin %}
+                        <td style="white-space:nowrap;">
+                            <span class="badge" style="background:{{ '#667eea' if item.user_id == 0 else '#6c757d' }};">{{ item.owner_name }}</span>
+                        </td>
+                        {% endif %}
                         <td style="white-space:nowrap;">{{ item.upload_date[:10] }}</td>
                         <td style="white-space:nowrap;">
                             {% if item.file_size > 0 %}
@@ -758,7 +885,7 @@
                     </tr>
                     {% if item.content_type == 'gallery' %}
                     <tr class="gallery-editor-row" id="gallery-edit-{{ item.id }}" style="display:none;">
-                        <td colspan="6">
+                        <td colspan="{{ 6 if is_admin else 5 }}">
                             {% set gimgs = gallery_images_map.get(item.id, []) %}
                             <table class="gallery-table" {% if not gimgs %}style="display:none;"{% endif %}>
                                 <tbody class="gallery-sortable" data-gallery="{{ item.id }}">
@@ -799,7 +926,7 @@
                     {% endif %}
                     {% if item.content_type == 'url' %}
                     <tr class="yt-opts-row" id="url-opts-{{ item.id }}" style="display:none;">
-                        <td colspan="6">
+                        <td colspan="{{ 6 if is_admin else 5 }}">
                             <form method="POST" action="{{ url_for('url_options', media_id=item.id) }}" class="yt-opts-form">
                                 <label style="flex:1;">
                                     URL:
@@ -814,7 +941,7 @@
                     {% if item.content_type == 'youtube' %}
                     {% set yp = youtube_params.get(item.id, {}) %}
                     <tr class="yt-opts-row" id="yt-opts-{{ item.id }}" style="display:none;">
-                        <td colspan="6">
+                        <td colspan="{{ 6 if is_admin else 5 }}">
                             <form method="POST" action="{{ url_for('youtube_options', media_id=item.id) }}" class="yt-opts-form">
                                 <label>
                                     <input type="checkbox" name="controls" {% if yp.get('controls') %}checked{% endif %}>
@@ -853,15 +980,15 @@
 
             {% if total_pages > 1 %}
             <div class="pagination">
-                {% if page > 1 %}<a href="{{ url_for('admin', page=page-1) }}">← Zurück</a>{% endif %}
+                {% if page > 1 %}<a href="{{ url_for('admin', page=page-1, view_user=view_user_id if (is_admin and view_user_id) else None) }}">← Zurück</a>{% endif %}
                 {% for p in range(1, total_pages + 1) %}
                     {% if p == page %}
                         <span class="current">{{ p }}</span>
                     {% else %}
-                        <a href="{{ url_for('admin', page=p) }}">{{ p }}</a>
+                        <a href="{{ url_for('admin', page=p, view_user=view_user_id if (is_admin and view_user_id) else None) }}">{{ p }}</a>
                     {% endif %}
                 {% endfor %}
-                {% if page < total_pages %}<a href="{{ url_for('admin', page=page+1) }}">Weiter →</a>{% endif %}
+                {% if page < total_pages %}<a href="{{ url_for('admin', page=page+1, view_user=view_user_id if (is_admin and view_user_id) else None) }}">Weiter →</a>{% endif %}
             </div>
             {% endif %}
 
@@ -870,6 +997,7 @@
         {% endif %}
     </div>
 
+    {% if is_admin %}
     <!-- ===== GLOBAL SETTINGS ===== -->
     <div class="section">
         <h2>Globale Einstellungen</h2>
@@ -904,16 +1032,150 @@
             </div>
         </div>
     </div>
+    {% endif %}
     </div>{# end tab-content #}
+
+    {% if is_admin %}
+    <div id="tab-users" style="display:none">
+    <!-- ===== USERS ===== -->
+    <div class="section">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+            <h2 style="margin-bottom: 0;">Benutzerverwaltung</h2>
+            <button type="button" class="btn btn-sm btn-success" id="btn-new-user" onclick="toggleNewUserForm()">
+                + Neuer Benutzer
+            </button>
+        </div>
+
+        <div class="form-bg" id="new-user-form" style="display: none; margin-bottom: 20px;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <h3 style="font-size: 15px; font-weight: 600; color: #333; margin: 0;">Neuen Benutzer anlegen</h3>
+                <button type="button" class="btn-sm btn-secondary" onclick="toggleNewUserForm()" style="padding: 2px 8px; font-size: 11px;">✕ Schließen</button>
+            </div>
+            <form method="POST" action="{{ url_for('users_create') }}">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label>Bezeichnung / Name</label>
+                        <input type="text" name="display_name" placeholder="z.B. Team Vertrieb" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Benutzername (Login)</label>
+                        <input type="text" name="username" placeholder="z.B. vertrieb" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Passwort</label>
+                        <input type="password" name="password" placeholder="Passwort festlegen" required>
+                    </div>
+                    <div>
+                        <label>&nbsp;</label>
+                        <button type="submit" class="btn-success">Anlegen</button>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        {% if users %}
+            {% for u in users %}
+            <div class="user-card">
+                <div class="user-card-header">
+                    <div>
+                        <strong style="font-size:16px; color:#333;">{{ u.display_name }}</strong>
+                        <span style="font-size:12px; color:#777; margin-left:8px;">@{{ u.username }}</span>
+                    </div>
+                    <div class="actions">
+                        <a href="{{ url_for('admin', view_user=u.id) }}" class="btn btn-sm btn-info"
+                           onclick="sessionStorage.setItem('adminTab', 'displays');">Playlists öffnen</a>
+                        <form method="POST" action="{{ url_for('users_delete', user_id=u.id) }}"
+                              onsubmit="return confirm('Benutzer &quot;{{ u.display_name }}&quot; wirklich löschen? Alle Inhalte dieses Benutzers werden ebenfalls gelöscht!');">
+                            <button type="submit" class="btn-sm btn-danger">Löschen</button>
+                        </form>
+                    </div>
+                </div>
+                <div class="user-card-body">
+                    <form method="POST" action="{{ url_for('users_update', user_id=u.id) }}" style="margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #eee;">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Bezeichnung / Name</label>
+                                <input type="text" name="display_name" value="{{ u.display_name }}" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Benutzername</label>
+                                <input type="text" name="username" value="{{ u.username }}" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Neues Passwort (optional)</label>
+                                <input type="password" name="password" placeholder="Leer lassen = unverändert">
+                            </div>
+                            <div>
+                                <label>&nbsp;</label>
+                                <button type="submit" class="btn-secondary">Daten speichern</button>
+                            </div>
+                        </div>
+                    </form>
+
+                    <form method="POST" action="{{ url_for('users_access', user_id=u.id) }}">
+                        <div style="font-size:13px; font-weight:600; color:#666; text-transform:uppercase; letter-spacing:0.05em; margin-bottom:10px;">
+                            Bereichs-Freigaben &amp; Wochentage
+                        </div>
+                        {% for d in displays %}
+                        {% set preset_key = d.layout_preset or 'fullscreen' %}
+                        {% set preset_info = layout_presets.get(preset_key, layout_presets['fullscreen']) %}
+                        {% set u_perms = user_zone_perms.get(u.id, {}).get(d.id, []) %}
+                        {% set sched = display_schedules.get(d.id, {}) %}
+                        <div class="access-display-box">
+                            <div class="access-display-title">
+                                {{ d.name }} <span style="font-weight:400; color:#888; font-size:12px;">({{ preset_info.label }})</span>
+                            </div>
+                            <div style="margin-bottom: 10px;">
+                                <div style="font-size:12px; color:#666; margin-bottom:6px; font-weight:500;">Freigegebene Bereiche (nicht angehakte Bereiche bleiben beim Administrator):</div>
+                                <div class="checkbox-group">
+                                    {% for zi in range(preset_info.zones) %}
+                                    <label class="checkbox-pill">
+                                        <input type="checkbox" name="zones_{{ d.id }}" value="{{ zi }}" {% if zi in u_perms %}checked{% endif %}>
+                                        {{ preset_info.zone_labels[zi] }}
+                                    </label>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                            <div>
+                                <div style="font-size:12px; color:#666; margin-bottom:6px; font-weight:500;">Zugewiesene Wochentage:</div>
+                                <div class="checkbox-group">
+                                    {% for wd in range(7) %}
+                                    {% set day_owner = sched.get(wd, 0) %}
+                                    <label class="checkbox-pill">
+                                        <input type="checkbox" name="weekdays_{{ d.id }}" value="{{ wd }}" {% if day_owner == u.id %}checked{% endif %}>
+                                        {{ weekdays_short[wd] }}
+                                        {% if day_owner != 0 and day_owner != u.id and day_owner in users_by_id %}
+                                        <span class="hint">({{ users_by_id[day_owner].display_name }})</span>
+                                        {% endif %}
+                                    </label>
+                                    {% endfor %}
+                                </div>
+                            </div>
+                        </div>
+                        {% endfor %}
+                        <button type="submit" class="btn-success">Freigaben &amp; Wochentage speichern</button>
+                    </form>
+                </div>
+            </div>
+            {% endfor %}
+        {% else %}
+            <p style="color:#999;">Noch keine weiteren Benutzer angelegt. Klicken Sie auf „+ Neuer Benutzer“, um ein Konto für einen weiteren Redakteur anzulegen.</p>
+        {% endif %}
+    </div>
+    </div>{# end tab-users #}
+    {% endif %}
 
 </div>
 
 <script src="{{ url_for('static', filename='js/sortable.min.js') }}"></script>
 <script>
+    var TARGET_USER_ID = {{ target_user_id | tojson }};
+
     // Tab switching
     function switchTab(name, btn) {
-        ['displays', 'content'].forEach(function(t) {
-            document.getElementById('tab-' + t).style.display = t === name ? '' : 'none';
+        ['displays', 'content', 'users'].forEach(function(t) {
+            var el = document.getElementById('tab-' + t);
+            if (el) el.style.display = t === name ? '' : 'none';
         });
         document.querySelectorAll('.tab-btn').forEach(function(b) { b.classList.remove('active'); });
         btn.classList.add('active');
@@ -928,45 +1190,54 @@
         }
     })();
 
-    // Display settings toggle
-    function toggleDisplaySettings(id) {
-        var panel = document.getElementById('display-settings-' + id);
-        var btn = document.getElementById('btn-toggle-settings-' + id);
+    // Generic collapsible display drawer helper (used for settings and schedule)
+    function _toggleDrawer(prefix, btnPrefix, labelText, storageKey, id) {
+        var panel = document.getElementById(prefix + id);
+        var btn = document.getElementById(btnPrefix + id);
         if (!panel) return;
         var isHidden = panel.style.display === 'none';
         panel.style.display = isHidden ? 'block' : 'none';
-        var openPanels = JSON.parse(sessionStorage.getItem('openDisplaySettings') || '[]');
+        var openPanels = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
         if (isHidden) {
             if (btn) {
                 btn.classList.add('active');
-                btn.innerHTML = '⚙ Einstellungen ▴';
+                btn.innerHTML = labelText + ' ▴';
             }
             if (openPanels.indexOf(id) === -1) openPanels.push(id);
         } else {
             if (btn) {
                 btn.classList.remove('active');
-                btn.innerHTML = '⚙ Einstellungen ▾';
+                btn.innerHTML = labelText + ' ▾';
             }
             openPanels = openPanels.filter(function(openId) { return openId !== id; });
         }
-        sessionStorage.setItem('openDisplaySettings', JSON.stringify(openPanels));
+        sessionStorage.setItem(storageKey, JSON.stringify(openPanels));
     }
 
-    // Restore open display settings on page load
-    (function() {
-        var openPanels = JSON.parse(sessionStorage.getItem('openDisplaySettings') || '[]');
+    function _restoreDrawers(prefix, btnPrefix, labelText, storageKey) {
+        var openPanels = JSON.parse(sessionStorage.getItem(storageKey) || '[]');
         openPanels.forEach(function(id) {
-            var panel = document.getElementById('display-settings-' + id);
-            var btn = document.getElementById('btn-toggle-settings-' + id);
+            var panel = document.getElementById(prefix + id);
+            var btn = document.getElementById(btnPrefix + id);
             if (panel) {
                 panel.style.display = 'block';
                 if (btn) {
                     btn.classList.add('active');
-                    btn.innerHTML = '⚙ Einstellungen ▴';
+                    btn.innerHTML = labelText + ' ▴';
                 }
             }
         });
-    })();
+    }
+
+    function toggleDisplaySettings(id) {
+        _toggleDrawer('display-settings-', 'btn-toggle-settings-', '⚙ Einstellungen', 'openDisplaySettings', id);
+    }
+    function toggleDisplaySchedule(id) {
+        _toggleDrawer('display-schedule-', 'btn-toggle-schedule-', '📅 Wochenplan', 'openDisplaySchedules', id);
+    }
+
+    _restoreDrawers('display-settings-', 'btn-toggle-settings-', '⚙ Einstellungen', 'openDisplaySettings');
+    _restoreDrawers('display-schedule-', 'btn-toggle-schedule-', '📅 Wochenplan', 'openDisplaySchedules');
 
     // Toggle new display form
     function toggleNewDisplayForm() {
@@ -989,6 +1260,23 @@
         }
     }
 
+    // Toggle new user form
+    function toggleNewUserForm() {
+        var form = document.getElementById('new-user-form');
+        var btn = document.getElementById('btn-new-user');
+        if (!form) return;
+        var isHidden = form.style.display === 'none';
+        if (isHidden) {
+            form.style.display = 'block';
+            if (btn) btn.textContent = '✕ Abbrechen';
+            var nameInput = form.querySelector('input[name="display_name"]');
+            if (nameInput) nameInput.focus();
+        } else {
+            form.style.display = 'none';
+            if (btn) btn.textContent = '+ Neuer Benutzer';
+        }
+    }
+
     function toggleRename(id) {
         document.getElementById('rename-' + id).classList.toggle('active');
     }
@@ -1005,9 +1293,9 @@
         document.getElementById('cc-lang-label-' + id).style.display = checked ? '' : 'none';
     }
 
-    // Duration auto-save on change
+    // Duration auto-save on change (display playlists)
     document.addEventListener('change', function(e) {
-        if (!e.target.classList.contains('dur-input')) return;
+        if (!e.target.classList.contains('dur-input') || e.target.classList.contains('zone-dur-input')) return;
         var displayId = e.target.dataset.display;
         var itemId    = e.target.dataset.item;
         var duration  = parseInt(e.target.value);
@@ -1015,7 +1303,7 @@
         fetch('/admin/display/' + displayId + '/playlist/item/' + itemId + '/duration', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
-            body: 'duration=' + duration
+            body: 'duration=' + duration + '&user_id=' + TARGET_USER_ID
         }).then(function(r) { return r.json(); }).then(function(data) {
             var cell = e.target.closest('.dur-cell');
             var saved = cell.querySelector('.dur-saved');
@@ -1055,7 +1343,7 @@
         fetch('/admin/display/' + displayId + '/playlist/item/' + itemId + '/spread', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
-            body: 'spread_mode=' + encodeURIComponent(e.target.value)
+            body: 'spread_mode=' + encodeURIComponent(e.target.value) + '&user_id=' + TARGET_USER_ID
         });
     });
 
@@ -1067,7 +1355,7 @@
         fetch('/admin/zone/' + zoneId + '/playlist/item/' + itemId + '/spread', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
-            body: 'spread_mode=' + encodeURIComponent(e.target.value)
+            body: 'spread_mode=' + encodeURIComponent(e.target.value) + '&user_id=' + TARGET_USER_ID
         });
     });
 
@@ -1078,7 +1366,8 @@
         var itemId    = e.target.dataset.item;
         fetch('/admin/display/' + displayId + '/playlist/item/' + itemId + '/remove', {
             method: 'POST',
-            headers: {'X-Requested-With': 'XMLHttpRequest'}
+            headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
+            body: 'user_id=' + TARGET_USER_ID
         }).then(function(r) { return r.json(); }).then(function(data) {
             if (!data.ok) return;
             var tr = e.target.closest('tr');
@@ -1104,7 +1393,7 @@
                 fetch('/admin/display/' + displayId + '/playlist/reorder', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-                    body: JSON.stringify({order: ids})
+                    body: JSON.stringify({order: ids, user_id: TARGET_USER_ID})
                 });
             }
         });
@@ -1116,6 +1405,7 @@
             e.preventDefault();
             var displayId = form.dataset.display;
             var data = new FormData(form);
+            data.append('user_id', TARGET_USER_ID);
             fetch('/admin/display/' + displayId + '/playlist/add', {
                 method: 'POST',
                 headers: {'X-Requested-With': 'XMLHttpRequest'},
@@ -1263,7 +1553,7 @@
         fetch('/admin/zone/' + zoneId + '/playlist/item/' + itemId + '/duration', {
             method: 'POST',
             headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
-            body: 'duration=' + duration
+            body: 'duration=' + duration + '&user_id=' + TARGET_USER_ID
         }).then(function(r) { return r.json(); }).then(function(data) {
             var cell = e.target.closest('.dur-cell');
             var saved = cell.querySelector('.dur-saved');
@@ -1292,7 +1582,9 @@
         var zoneId = e.target.dataset.zone;
         var itemId = e.target.dataset.item;
         fetch('/admin/zone/' + zoneId + '/playlist/item/' + itemId + '/remove', {
-            method: 'POST', headers: {'X-Requested-With': 'XMLHttpRequest'}
+            method: 'POST',
+            headers: {'Content-Type': 'application/x-www-form-urlencoded', 'X-Requested-With': 'XMLHttpRequest'},
+            body: 'user_id=' + TARGET_USER_ID
         }).then(function(r) { return r.json(); }).then(function(data) {
             if (!data.ok) return;
             var tr = e.target.closest('tr');
@@ -1317,7 +1609,7 @@
                 fetch('/admin/zone/' + zoneId + '/playlist/reorder', {
                     method: 'POST',
                     headers: {'Content-Type': 'application/json', 'X-Requested-With': 'XMLHttpRequest'},
-                    body: JSON.stringify({order: ids})
+                    body: JSON.stringify({order: ids, user_id: TARGET_USER_ID})
                 });
             }
         });
@@ -1329,6 +1621,7 @@
             e.preventDefault();
             var zoneId = form.dataset.zone;
             var data = new FormData(form);
+            data.append('user_id', TARGET_USER_ID);
             fetch('/admin/zone/' + zoneId + '/playlist/add', {
                 method: 'POST',
                 headers: {'X-Requested-With': 'XMLHttpRequest'},
