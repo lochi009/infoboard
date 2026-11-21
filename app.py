@@ -565,6 +565,10 @@ def zone_api(slug, zone_index):
     if not display:
         return jsonify({'error': 'Display nicht gefunden'}), 404
 
+    preset = display['layout_preset'] or 'fullscreen'
+    if preset == 'fullscreen' and zone_index == 0:
+        return display_api(slug)
+
     zone = get_zone_by_display_and_index(display['id'], zone_index)
 
     # Fallback: zone 0 with no zone record uses display-level settings (backward compat)
