@@ -12,8 +12,10 @@ Self-hosted digital signage that runs in any modern browser. No dedicated player
 - **PDF spread view** — side-by-side page pairs (book/magazine layout), configurable per playlist item
 - **Image galleries** — batch upload, sortable, shown as slideshow
 - **Website proxy** — embeds external pages by stripping X-Frame-Options/CSP headers
-- **Admin panel** — upload, rename, delete media; manage playlists; configure per-display settings
-- **Authentication** — single admin user with bcrypt-hashed password
+- **Admin panel** — upload, rename, delete media; manage playlists; collapsible per-display settings and weekday schedule drawers; layout previews
+- **Multi-user support** — create additional user accounts (`Benutzer` tab) with isolated media libraries and playlists; users only see and manage their own uploads and permitted zones
+- **Weekday scheduling & zone permissions** — assign weekdays (Monday–Sunday) per display to specific users and grant per-zone checkboxes matching the active layout; unpermitted zones and empty user playlists automatically fall back to the administrator's content
+- **Authentication** — admin account (`config.json`) and database user accounts with bcrypt-hashed passwords
 - **Auto-updating display** — polls for changes every 10 seconds; content, layout changes and new app versions are picked up without a manual refresh
 - **Progress indicator** — per display: progress bar, subtle bar, countdown (default, lowest CPU use) or none
 
@@ -123,10 +125,11 @@ infoboard/
 
 ## Security Notes
 
-- Admin password stored as bcrypt hash (cost factor 12)
+- Admin and user passwords stored as bcrypt hashes (cost factor 12)
 - File uploads restricted to allowed extensions
 - Uploaded files stored with UUID filenames (prevents path traversal)
-- Session management via Flask-Login
+- Session management via Flask-Login with role-based access control (`@admin_required` for system/display/user management)
+- Per-user media and playlist isolation enforced on all routes and database queries
 
 ## Updating
 
