@@ -136,21 +136,23 @@
         .display-card-body .now-playing strong { color: #333; font-size: 15px; display: block; }
         .display-card-body .now-playing .meta { color: #999; font-size: 12px; }
 
-        /* 2-column layout: settings | playlist */
-        .display-card-columns {
-            display: flex; gap: 0; border-top: 1px solid #eee;
+        /* Display settings drawer */
+        .display-settings-drawer {
+            padding: 16px 20px; background: #fafafa;
+            border-top: 1px solid #eee; border-bottom: 1px solid #eee;
         }
-        .card-col-settings {
-            flex: 1; padding: 14px 16px; background: #fafafa; border-right: 1px solid #eee;
+        .display-settings-drawer h3 {
+            font-size: 13px; font-weight: 600; color: #888; text-transform: uppercase;
+            letter-spacing: 0.05em; margin-bottom: 12px;
         }
-        .card-col-settings h3 { font-size: 13px; font-weight: 600; color: #888; text-transform: uppercase;
-                                letter-spacing: 0.05em; margin-bottom: 12px; }
-        .card-col-settings .form-row { margin-bottom: 10px; }
+        .display-settings-drawer .form-row { margin-bottom: 10px; }
+
         .card-col-playlist {
-            flex: 1; padding: 14px 16px; background: #fff;
+            padding: 14px 16px; background: #fff; border-top: 1px solid #eee;
         }
         .card-col-playlist h3 { font-size: 13px; font-weight: 600; color: #888; text-transform: uppercase;
                                 letter-spacing: 0.05em; margin-bottom: 12px; }
+        .toggle-settings-btn.active { background: #495057; }
 
         /* Display card status bar */
         .display-card-status {
@@ -284,6 +286,8 @@
                         </div>
                     </div>
                     <div class="actions">
+                        <button type="button" class="btn-sm btn-secondary toggle-settings-btn" id="btn-toggle-settings-{{ d.id }}"
+                                onclick="toggleDisplaySettings({{ d.id }})">⚙ Einstellungen ▾</button>
                         <form method="POST" action="{{ url_for('regenerate_renders', display_id=d.id) }}"
                               onsubmit="return confirm('Alle PDFs für dieses Display neu rendern?');">
                             <button type="submit" class="btn-sm btn-secondary">PDFs neu rendern</button>
@@ -340,76 +344,80 @@
                     {% endif %}
                 </div>
 
-                <div class="display-card-columns">
-                    <!-- Settings column -->
-                    <div class="card-col-settings">
-                        <h3>Einstellungen</h3>
-                        <form method="POST" action="{{ url_for('update_display_settings', display_id=d.id) }}">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Name</label>
-                                    <input type="text" name="name" value="{{ d.name }}" required>
-                                </div>
-                                <div class="form-group form-group-sm">
-                                    <label>Breite (px)</label>
-                                    <input type="number" name="width" value="{{ d.width }}" min="1" required>
-                                </div>
-                                <div class="form-group form-group-sm">
-                                    <label>Höhe (px)</label>
-                                    <input type="number" name="height" value="{{ d.height }}" min="1" required>
-                                </div>
-                                <div class="form-group form-group-sm">
-                                    <label>Standard-Dauer (s)</label>
-                                    <input type="number" name="cycle_interval" value="{{ d.cycle_interval }}" min="1" required>
-                                </div>
-                            </div>
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <label>Hintergrundfarbe</label>
-                                    <input type="color" name="background_color" value="{{ d.background_color }}" required>
-                                </div>
-                                <div class="form-group">
-                                    <label>Fortschrittsanzeige</label>
-                                    <select name="progress_indicator" required>
-                                        <option value="progress"  {% if d.progress_indicator == 'progress'  %}selected{% endif %}>Fortschrittsbalken</option>
-                                        <option value="subtle"    {% if d.progress_indicator == 'subtle'    %}selected{% endif %}>Dezenter Balken</option>
-                                        <option value="countdown" {% if d.progress_indicator == 'countdown' %}selected{% endif %}>Countdown</option>
-                                        <option value="none"      {% if d.progress_indicator == 'none'      %}selected{% endif %}>Keine</option>
-                                    </select>
-                                </div>
-                                <div class="form-group" style="flex:0;white-space:nowrap;">
-                                    <label>Hintergrund</label>
-                                    <label style="display:flex;align-items:center;gap:6px;margin-top:9px;cursor:pointer;font-weight:400;">
-                                        <input type="checkbox" name="ambient_bg" {% if d.ambient_bg %}checked{% endif %}
-                                               style="width:auto;margin:0;">
-                                        Dynamisch (Foto)
-                                    </label>
-                                </div>
-                            </div>
-                            <button type="submit" class="btn-success">Speichern</button>
-                            <small style="color:#999;margin-left:10px;">Auflösungsänderung rendert alle PDFs neu.</small>
-                        </form>
-
-                        <hr style="margin:14px 0;border:none;border-top:1px solid #eee;">
-                        <h3>Layout</h3>
-                        <form method="POST" action="{{ url_for('update_display_layout', display_id=d.id) }}">
-                            <div class="form-row">
-                                <div class="form-group">
-                                    <select name="layout_preset" required>
-                                        {% for key, preset in layout_presets.items() %}
-                                        <option value="{{ key }}" {% if d.layout_preset == key %}selected{% endif %}>{{ preset.label }}</option>
-                                        {% endfor %}
-                                    </select>
-                                </div>
-                                <div>
-                                    <button type="submit" class="btn-secondary">Anwenden</button>
-                                </div>
-                            </div>
-                        </form>
+                <!-- Settings drawer (hidden by default) -->
+                <div class="display-settings-drawer" id="display-settings-{{ d.id }}" style="display: none;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                        <h3 style="margin-bottom:0;">Display-Einstellungen</h3>
+                        <button type="button" class="btn-sm btn-secondary" onclick="toggleDisplaySettings({{ d.id }})" style="padding: 2px 8px; font-size: 11px;">✕ Schließen</button>
                     </div>
+                    <form method="POST" action="{{ url_for('update_display_settings', display_id=d.id) }}">
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Name</label>
+                                <input type="text" name="name" value="{{ d.name }}" required>
+                            </div>
+                            <div class="form-group form-group-sm">
+                                <label>Breite (px)</label>
+                                <input type="number" name="width" value="{{ d.width }}" min="1" required>
+                            </div>
+                            <div class="form-group form-group-sm">
+                                <label>Höhe (px)</label>
+                                <input type="number" name="height" value="{{ d.height }}" min="1" required>
+                            </div>
+                            <div class="form-group form-group-sm">
+                                <label>Standard-Dauer (s)</label>
+                                <input type="number" name="cycle_interval" value="{{ d.cycle_interval }}" min="1" required>
+                            </div>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label>Hintergrundfarbe</label>
+                                <input type="color" name="background_color" value="{{ d.background_color }}" required>
+                            </div>
+                            <div class="form-group">
+                                <label>Fortschrittsanzeige</label>
+                                <select name="progress_indicator" required>
+                                    <option value="progress"  {% if d.progress_indicator == 'progress'  %}selected{% endif %}>Fortschrittsbalken</option>
+                                    <option value="subtle"    {% if d.progress_indicator == 'subtle'    %}selected{% endif %}>Dezenter Balken</option>
+                                    <option value="countdown" {% if d.progress_indicator == 'countdown' %}selected{% endif %}>Countdown</option>
+                                    <option value="none"      {% if d.progress_indicator == 'none'      %}selected{% endif %}>Keine</option>
+                                </select>
+                            </div>
+                            <div class="form-group" style="flex:0;white-space:nowrap;">
+                                <label>Hintergrund</label>
+                                <label style="display:flex;align-items:center;gap:6px;margin-top:9px;cursor:pointer;font-weight:400;">
+                                    <input type="checkbox" name="ambient_bg" {% if d.ambient_bg %}checked{% endif %}
+                                           style="width:auto;margin:0;">
+                                    Dynamisch (Foto)
+                                </label>
+                            </div>
+                        </div>
+                        <div style="display:flex;align-items:center;gap:10px;margin-top:10px;">
+                            <button type="submit" class="btn-success">Speichern</button>
+                            <small style="color:#999;">Auflösungsänderung rendert alle PDFs neu.</small>
+                        </div>
+                    </form>
 
-                    <!-- Playlist column -->
-                    <div class="card-col-playlist">
+                    <hr style="margin:14px 0;border:none;border-top:1px solid #e1e1e1;">
+                    <h3 style="margin-bottom:10px;">Layout</h3>
+                    <form method="POST" action="{{ url_for('update_display_layout', display_id=d.id) }}">
+                        <div class="form-row">
+                            <div class="form-group" style="max-width:320px;">
+                                <select name="layout_preset" required>
+                                    {% for key, preset in layout_presets.items() %}
+                                    <option value="{{ key }}" {% if d.layout_preset == key %}selected{% endif %}>{{ preset.label }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <button type="submit" class="btn-secondary">Anwenden</button>
+                            </div>
+                        </div>
+                    </form>
+                </div>
+
+                <!-- Playlist column -->
+                <div class="card-col-playlist">
                         <h3>Playlist</h3>
                         {% if not pl %}
                         <p style="color:#999;font-size:13px;margin-bottom:12px;" class="playlist-empty-{{ d.id }}">Leer — neuester Inhalt wird automatisch angezeigt.</p>
@@ -474,7 +482,6 @@
                             </div>
                         </form>
                     </div>
-                </div>
 
                 {% if d.layout_preset and d.layout_preset != 'fullscreen' %}
                 {% set zones = display_zones.get(d.id, []) %}
@@ -887,6 +894,46 @@
             var btn = document.querySelector('[data-tab="' + saved + '"]');
             if (btn) switchTab(saved, btn);
         }
+    })();
+
+    // Display settings toggle
+    function toggleDisplaySettings(id) {
+        var panel = document.getElementById('display-settings-' + id);
+        var btn = document.getElementById('btn-toggle-settings-' + id);
+        if (!panel) return;
+        var isHidden = panel.style.display === 'none';
+        panel.style.display = isHidden ? 'block' : 'none';
+        var openPanels = JSON.parse(sessionStorage.getItem('openDisplaySettings') || '[]');
+        if (isHidden) {
+            if (btn) {
+                btn.classList.add('active');
+                btn.innerHTML = '⚙ Einstellungen ▴';
+            }
+            if (openPanels.indexOf(id) === -1) openPanels.push(id);
+        } else {
+            if (btn) {
+                btn.classList.remove('active');
+                btn.innerHTML = '⚙ Einstellungen ▾';
+            }
+            openPanels = openPanels.filter(function(openId) { return openId !== id; });
+        }
+        sessionStorage.setItem('openDisplaySettings', JSON.stringify(openPanels));
+    }
+
+    // Restore open display settings on page load
+    (function() {
+        var openPanels = JSON.parse(sessionStorage.getItem('openDisplaySettings') || '[]');
+        openPanels.forEach(function(id) {
+            var panel = document.getElementById('display-settings-' + id);
+            var btn = document.getElementById('btn-toggle-settings-' + id);
+            if (panel) {
+                panel.style.display = 'block';
+                if (btn) {
+                    btn.classList.add('active');
+                    btn.innerHTML = '⚙ Einstellungen ▴';
+                }
+            }
+        });
     })();
 
     function toggleRename(id) {
