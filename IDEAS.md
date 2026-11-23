@@ -15,6 +15,8 @@ Diese Datei sammelt Ideen, Erweiterungswünsche und Konzepte für die Weiterentw
 - [ ] **Layouts um einen Tickerbalken unten ergänzen**  
   Die 2- und 3-Spalten-Ansicht (bzw. grundsätzlich alle Layout-Ansichten) um einen optionalen oder integrierten Tickerbalken am unteren Bildschirmrand erweitern.
 
+ [ ] **"Einbrennschutz" ergänzen**  
+Eine Funktion einbauen, die verhindert, dass der gleiche Inhalt über lange Zeit an der gleichen Stelle angezeigt wird, z.B. durch erzwungene Bildwechsel, Bildverschiebungen o.Ä.
 ---
 
 ## 🗓️ Als Nächstes geplant
